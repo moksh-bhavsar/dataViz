@@ -1,0 +1,235 @@
+---
+title: "Assignment I"
+subtitle: "CSCI 4210 - Info Viz"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# Remove all the graphics
+graphics.off()
+# Clear the memory
+rm(list=ls())
+library(tidyverse)
+library(maps)
+library(ggthemes)
+```
+
+# Data Summary
+For the assignment we are using two datasets. First is the Counsumer Price Index of Canada from 2015 to 2022, downloaded from Stats Canada website and the other is also from Stats Canada documention Crime Rates in Canada from 2015 till 2022.
+
+## World Data
+
+Let's take a look at the GDP of all the countries in the world. The data is collected from World Bank's website. The dataset can be found using this [link](https://data.worldbank.org/indicator/NY.GDP.MKTP.CD). The data contains GDP of all the countries from 1992 to 2022. For our use case, we will have to find the most recent value of GDP growth from our dataset since some countries might not have reported their GDP growth in recent years.
+
+```{r}
+# reading the data and skipping the first four rows since those included information about the dataset
+world_data <- read_csv("./API_NY/World_GDP.csv", skip = 4, show_col_types = FALSE) |>
+  as_tibble()
+
+# manipulating the data to add a new column which has the last non-NA value
+world_data <- world_data  |>
+  rowwise() |>
+  mutate(most_recent_value = last(na.omit(c_across(where(is.numeric)))))
+head(world_data)
+```
+<br>
+Now, let's load the geographical data from map package and just keep latitude, longitude, group and the region.
+```{r}
+# loading the geographic data for world map
+d_world <- map_data("world") |>
+  select(lon = long, lat, group, id = region) |>
+  as_tibble()
+head(d_world)
+```
+<br>
+So we have our geographic data and our GDP data, we need to now join them in a manner that makes sense to our use case. In this scenario, we will do left join on our geographical data, since we want to display the whole map even if we do not have the GDP data for a region.
+```{r}
+d_world_gdp <- d_world |>
+  left_join(world_data, join_by(id == 'Country Name'))
+head(d_world_gdp)
+```
+<br>
+So, we have prepared our data, now let's see how the regions around the world did on their most recent GDP change.<br>
+**Note:** The GDP data had country names different than the geographical data, so some manual changes were made to change the name of the countries in the GDP data.
+```{r}
+d_world_gdp |> 
+  ggplot(aes(x = lon, y = lat, group = group, fill = most_recent_value)) +
+  geom_polygon(colour="black", linewidth = 0.15) +
+  coord_quickmap() +
+  theme(legend.position = "none") +
+  theme_map() +
+  scale_fill_viridis_c() +
+  labs(title = "The change in GDP for each country",
+       subtitle = "Source: World Bank Open Data")
+```
+
+<br>Now since we have taken a look at the global level, lets take a closer look at Canada with two indicators. Consumer Price Index (CPI) and Crime Severity Index (CSI). First we will take a look at CPI data.
+
+## CPI Data
+
+**Description**
+This dataset contains a subset of the Consumer Price Index in Canada for different products and product groups available on [Stats Canada](https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1810000501&pickMembers%5B0%5D=1.2&cubeTimeFrame.startYear=2015&cubeTimeFrame.endYear=2022&referencePeriods=20150101%2C20220101). It takes the year 2002 as the reference year and the changes are calculated using the values in 2002 as benchmark.
+
+**Format**
+
+A data frame with 120 rows and 15 variables
+
+* REF_DATE
+    + The year
+* GEO
+    + Location of the data
+* DGUID
+    +
+* Product and product groups
+    + Grouping of items that are similar
+* UOM
+    + The reference year
+* UOM_ID
+    + The ID for the reference year used
+* Scalar Factor
+    + The unit of the values in the table
+* Scalar_ID
+    + The ID of the scalar unit being used
+* Vector
+    + The unique vector that the values are retrieved from
+* Coordinate
+    +
+* Value
+    + The value of the product and product grouping since reference year
+* Decimals
+    + The amount of decimal showed for value
+
+<br>
+Let's load the data for CPI and select only revelant columns
+```{r}
+cpi <- read_csv("./CPIIndex.csv", show_col_types = FALSE) |> 
+  select(REF_DATE, 'Products and product groups', VALUE) |>
+  group_by(`Products and product groups`, REF_DATE) |>
+  rename(year = REF_DATE)
+head(cpi)
+```
+### Cleaning data to remove unnecessary variables
+
+Since, the value column has 2002 as a benchmark and considers the 2002 value as 100 and all the other values are scaled to reflect the changes since 2002, which are not useful for our data visualization. So, we will calculate the change in value for each group with the value in the previous year. This means that the first year, will have a value of NA, but we can replace it with 0 since we do not care about a particular year's CPI but about the general change in CPI.
+```{r}
+cpi <- cpi |> 
+  group_by(`Products and product groups`) |>  # grouping the data by the groups
+  mutate(Change_in_Price = c(NA, diff(VALUE))) |> # creating a new column which will have change in value
+  ungroup() |> # ungrouping the data
+  replace_na(list(Change_in_Price = 0)) |> #replacing the NA with 0
+  mutate(Change_in_Price = Change_in_Price/100) # changing the values to decimal from percentage
+head(cpi)
+```
+
+### Plotting the data
+Let's plot the data and see how the changes in price were for different groups. The legend is turned of since we have a large amount of labels.
+```{r}
+x <- length(unique(cpi$`Products and product groups`)) # finding the amount of groups the data has
+cpi |> ggplot(aes(x=year, y = Change_in_Price, group = `Products and product groups`, colour = `Products and product groups`)) +
+  geom_line() +
+  scale_color_manual(values = colorRampPalette(c('red', 'blue'))(x)) +
+  scale_y_continuous(name = "Change in Value", limits = c(-0.6, 0.6), labels = scales::percent) +
+  theme(legend.position = "none") +
+  labs(title = "The change in CPI for various products",
+       subtitle = "Source: Stats Canada (2015-2022)",
+       x = "Year")
+```
+<br>Now, let's look at just three items and how they have contributed to overall change in CPI value.
+```{r}
+cpi |> filter(`Products and product groups` %in% c("All-items", "Gasoline", "Energy", "All-items excluding energy") ) |>
+  ggplot(aes(x = year, y = Change_in_Price, fill = `Products and product groups`)) +
+  geom_bar(position = "dodge", stat = 'identity') +
+  scale_y_continuous(labels = scales::percent_format(), ) +
+  labs(title = "Change in certain Product and product groups",
+       subtitle = "Source: Stats Canada (2015-2022)",
+       x = "Year",
+       y = "Change in Price") + 
+  theme(legend.position = "bottom")
+```
+<br>The above graph shows that the change in CPI of Energy and Gasoline dropped drastically during the Covid lockdowns across the globe during 2019-2020. However, as the the world began to end lockdowns and began lifting travel restrictions, we saw a huge increase in change of price in 2021 and then in 2022 due to global conflicts. The other important thing to observe is that usually Energy has a large contribution to the overall change in CPI.
+
+## Crime Statistics Data
+
+**Description**
+This dataset contains a subset of the Crime Statistics in Canada for different types of crimes available on [Stats Canada](https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=3510002601&pickMembers%5B0%5D=1.1&cubeTimeFrame.startYear=2015&cubeTimeFrame.endYear=2022&referencePeriods=20150101%2C20220101).
+
+**Format**
+
+A data frame with 144 rows and 15 variables
+
+* REF_DATE
+    + The year
+* GEO
+    + Location of the data
+* DGUID
+    +
+* Statistics
+    + Different type of crime severity index
+* UOM
+    + The unit of measurement, can be index or percent
+* UOM_ID
+    + The ID for the unit of measurement used
+* Scalar Factor
+    + The unit of the values in the table
+* Scalar_ID
+    + The ID of the scalar unit being used
+* Vector
+    + The unique vector that the values are retrieved from
+* Coordinate
+    +
+* Value
+    + The value of the product and product grouping since reference year
+* Decimals
+    + The amount of decimal showed for value
+    
+<br>
+Let's load the data for CSI and select only revelant columns
+```{r}
+csi <- read_csv("./CrimeRates.csv", show_col_types = FALSE) |>
+  filter(UOM == "Percent") |>
+  select(REF_DATE, Statistics, VALUE)
+head(csi)
+```
+### Cleaning data to remove unnecessary variables
+Since, the value column is already percent change in the statistics, we do not need to calculate the change in value but need to divide by 100, since we will actually use scale_y_continuous to change our data in percentage.
+```{r}
+csi <- csi |> 
+  mutate(VALUE = VALUE/100) |> # changing the values to decimal from percentage
+  rename(year = REF_DATE)
+head(csi)
+```
+
+### Plotting the data
+Let's plot the data and see how the changes in price were for different groups. The legend is turned of since we have a large amount of labels.
+
+```{r}
+x2 <- length(unique(csi$Statistics)) # finding the amount of groups the data has
+csi |> ggplot(aes(x=year, y = VALUE, group = Statistics, colour = Statistics)) +
+  geom_line() +
+  scale_color_manual(values = colorRampPalette(c('red', 'blue'))(x2)) +
+  scale_y_continuous(name = "Change in Value", labels = scales::percent) +
+  theme(legend.position = "none") +
+  labs(title = "The change in CSI for various products",
+       subtitle = "Source: Stats Canada (2015-2022)",
+       x = "Year")
+```
+<br>Now, let's see how and if CPI and CSI correlate with each other?
+```{r}
+cpi |>
+  filter(`Products and product groups` == "All-items") |>
+  ggplot(aes(x = year)) +
+  geom_step(aes(y=Change_in_Price, color = "magenta")) +
+  geom_step(data = filter(csi, Statistics == "Percent change in crime severity index"), aes(y = VALUE, color = "yellow")) +
+  labs(y = "Change in Price",
+       title = "Comparison of CPI and CSI",
+       subtitle = "Source: Stats Canada (2015-2022)") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  guides(colour = guide_legend(title = "Data")) +
+  scale_colour_discrete(labels = c("All-items CPI", "General CSI")) + 
+  theme(legend.position = "bottom") +
+  theme_stata()
+```
+<br>**Note:** The 2015 value of the CPI value is 0 since we use it as a reference for our data instead of the 2002 provided.<br>
+From the graph above, we can make certain observations. First is the fact that year 2020 was Covid lockdown year and resulted in CSI going negative for one and the only time in our data whereas the CPI still increased but with light change. Moreover, we also see that CSI saw a stark increase in the year 2021, almost as much in magnitude as it decreased the previous year. This shows that the previous drop in CSI value was a result of lockdowns and restriction of public or group meetings as well as travel restrictions.
